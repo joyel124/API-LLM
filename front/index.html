@@ -267,9 +267,9 @@
           </label>
           <label class="field">
             <span class="lbl">max_tokens
-              <span class="info" data-tip="Tope de tokens que el modelo puede generar en la respuesta. OpenRouter reserva crédito por este valor antes de responder, por eso conviene un número moderado.">?</span>
+              <span class="info" data-tip="Tope de tokens de la respuesta. Vac&iacute;o = sin tope (el modelo responde hasta terminar). Ojo: OpenRouter reserva cr&eacute;dito seg&uacute;n este valor; si lo dejas vac&iacute;o reserva el m&aacute;ximo del modelo, as&iacute; que necesitas saldo suficiente.">?</span>
             </span>
-            <input type="number" id="maxTokens" min="1" placeholder="1024 por defecto" />
+            <input type="number" id="maxTokens" min="1" placeholder="sin l&iacute;mite" />
           </label>
           <label class="field">
             <span class="lbl">top_p
@@ -486,7 +486,9 @@ async function send() {
   // OpenRouter usa el nativo si el modelo lo soporta y, si no, cae a OCR.
   const payload = { model: els.model.value.trim(), messages: history, stream: els.streamToggle.checked };
   const t = parseFloat(els.temperature.value); if (!isNaN(t)) payload.temperature = t;
-  const m = parseInt(els.maxTokens.value);     payload.max_tokens = !isNaN(m) ? m : 1024;
+  // max_tokens: por defecto NO se manda -> el modelo responde sin tope artificial.
+  // (OpenRouter reservará el máximo del modelo, así que requiere saldo suficiente.)
+  const m = parseInt(els.maxTokens.value);     if (!isNaN(m)) payload.max_tokens = m;
   const p = parseFloat(els.topP.value);        if (!isNaN(p)) payload.top_p = p;
 
   try {
