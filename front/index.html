@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LLM Chat</title>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --panel:     #161b22;
+    --panel-2:   #1c232d;
+    --border:    #2a323d;
+    --text:      #e6edf3;
+    --muted:     #8b98a8;
+    --accent:    #56d4b8;
+    --user:      #6aa3ff;
+    --danger:    #f26d6d;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; overflow: hidden; }   /* nada hace scroll a nivel página */
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .app { display: flex; height: 100vh; overflow: hidden; }
+
+  /* ----------------------------- Sidebar ----------------------------- */
+  .side {
+    width: 300px; flex: none; background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 18px; display: flex; flex-direction: column; gap: 16px;
+    overflow-y: auto; overflow-x: hidden;
+    transition: width .22s ease, padding .22s ease, opacity .18s ease;
+  }
+  .app.collapsed .side {
+    width: 0; padding-left: 0; padding-right: 0;
+    opacity: 0; border-right-color: transparent; pointer-events: none;
+  }
+
+  .side-head { display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 30px; height: 30px; border-radius: 8px; flex: none;
+    background: linear-gradient(145deg, var(--accent), #2f9e88);
+    display: grid; place-items: center; color: #06120f; font-weight: 800;
+    font-family: var(--mono); font-size: 13px;
+  }
+  .brand h1 { font-size: 16px; margin: 0; letter-spacing: .2px; white-space: nowrap; }
+
+  .iconbtn {
+    flex: none; width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--muted);
+    display: grid; place-items: center;
+  }
+  .iconbtn:hover { color: var(--text); border-color: var(--accent); }
+  .iconbtn svg { width: 17px; height: 17px; }
+
+  .card {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px;
+  }
+  .card h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .14em;
+    color: var(--muted); margin: 0 0 12px; font-weight: 600; font-family: var(--mono);
+  }
+
+  .stat { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; font-size: 13px; }
+  .stat .k { color: var(--muted); white-space: nowrap; }
+  .stat .v { font-family: var(--mono); font-size: 12px; text-align: right; word-break: break-all; }
+  .health { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; }
+  .health .led { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .health.ok .led  { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .health.bad .led { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+
+  label.field { display: block; margin-bottom: 12px; }
+  label.field:last-child { margin-bottom: 0; }
+  label.field > .lbl {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--muted); font-family: var(--mono); margin-bottom: 5px;
+  }
+  input[type=text], input[type=number], select {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-family: var(--mono); font-size: 12px;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent;
+  }
+
+  /* tooltip de ayuda en parámetros */
+  .info {
+    width: 15px; height: 15px; border-radius: 50%; flex: none;
+    border: 1px solid var(--border); color: var(--muted);
+    display: inline-grid; place-items: center; font-size: 10px; cursor: help;
+    position: relative; font-family: var(--sans);
+  }
+  .info:hover { color: var(--accent); border-color: var(--accent); }
+  .info::after {
+    content: attr(data-tip); position: absolute; left: 22px; top: 50%;
+    transform: translateY(-50%) scale(.96); transform-origin: left center;
+    width: 220px; background: #0a0e13; color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px;
+    font-size: 12px; line-height: 1.45; font-family: var(--sans);
+    box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 30;
+    opacity: 0; pointer-events: none; transition: opacity .12s, transform .12s;
+  }
+  .info:hover::after { opacity: 1; transform: translateY(-50%) scale(1); }
+
+  .toggle { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+  .toggle .lbl { display: flex; align-items: center; gap: 6px; }
+  .switch { position: relative; width: 38px; height: 22px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track { position: absolute; inset: 0; background: var(--border); border-radius: 999px; transition: .15s; cursor: pointer; }
+  .switch .track::before { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--text); transition: .15s; }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::before { transform: translateX(16px); background: var(--bg); }
+
+  details.params { margin-top: 4px; }
+  details.params summary { cursor: pointer; font-size: 11px; color: var(--muted); font-family: var(--mono); list-style: none; padding: 4px 0; }
+  details.params summary::-webkit-details-marker { display: none; }
+  details.params summary::before { content: "\25B8  "; }
+  details.params[open] summary::before { content: "\25BE  "; }
+  .params-grid { padding-top: 10px; }
+
+  button.refresh { width: 100%; margin-top: 4px; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 7px; font-family: var(--mono); font-size: 11px; cursor: pointer; }
+  button.refresh:hover { color: var(--text); border-color: var(--accent); }
+
+  /* ------------------------------ Main ------------------------------ */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+  .topbar {
+    flex: none; height: 54px; display: flex; align-items: center; gap: 12px;
+    padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  .topbar .title { font-family: var(--mono); font-size: 13px; color: var(--text); }
+  .topbar .title span { color: var(--muted); }
+  .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-left: 10px; }
+  .topbar .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .topbar .dot.bad { background: var(--danger); }
+
+  .stream { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
+  .stream-inner { max-width: 760px; margin: 0 auto; padding: 28px 24px 8px; }
+
+  .empty { text-align: center; color: var(--muted); margin-top: 16vh; }
+  .empty .big { font-size: 24px; color: var(--text); font-weight: 600; margin-bottom: 8px; letter-spacing: -.2px; }
+  .empty code { font-family: var(--mono); color: var(--accent); }
+
+  .msg { display: flex; gap: 14px; margin-bottom: 24px; }
+  .avatar { width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid; place-items: center; font-family: var(--mono); font-size: 11px; font-weight: 600; }
+  .msg.user .avatar { background: rgba(106,163,255,.14); color: var(--user); border: 1px solid rgba(106,163,255,.35); }
+  .msg.bot  .avatar { background: rgba(86,212,184,.12); color: var(--accent); border: 1px solid rgba(86,212,184,.3); }
+  .msg.err  .avatar { background: rgba(242,109,109,.12); color: var(--danger); border: 1px solid rgba(242,109,109,.3); }
+  .bubble { min-width: 0; padding-top: 3px; }
+  .bubble .role { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-bottom: 4px; }
+  .bubble .body { word-wrap: break-word; }
+  .bubble .body p { margin: 0 0 10px; }
+  .bubble .body p:last-child { margin-bottom: 0; }
+  .bubble .body pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-family: var(--mono); font-size: 13px; margin: 0 0 10px; }
+  .bubble .body code:not(pre code) { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-family: var(--mono); font-size: 13px; }
+  .bubble .body a { color: var(--accent); }
+  .msg.err .body { color: var(--danger); font-family: var(--mono); font-size: 13px; white-space: pre-wrap; }
+
+  .attachlist { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; color: var(--muted); }
+  .chip .x { cursor: pointer; color: var(--muted); }
+  .chip .x:hover { color: var(--danger); }
+
+  .caret { display: inline-block; width: 7px; height: 15px; background: var(--accent); vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* --------------------------- Composer flotante --------------------------- */
+  .composer { flex: none; padding: 10px 16px 18px; position: relative; }
+  .composer::before {
+    content: ""; position: absolute; left: 0; right: 0; top: -28px; height: 28px;
+    background: linear-gradient(to top, var(--bg), transparent); pointer-events: none;
+  }
+  .composer-inner { max-width: 760px; margin: 0 auto; }
+  .pending { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .box {
+    display: flex; align-items: flex-end; gap: 8px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 8px 8px 8px 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  }
+  .box:focus-within { border-color: var(--accent); }
+  .box.drag { border-color: var(--accent); background: rgba(86,212,184,.08); box-shadow: 0 0 0 3px rgba(86,212,184,.15), 0 10px 30px rgba(0,0,0,.35); }
+  .box.drag textarea#input::placeholder { color: var(--accent); }
+  textarea#input { flex: 1; resize: none; max-height: 200px; background: transparent; color: var(--text); border: none; font-family: var(--sans); font-size: 15px; line-height: 1.5; padding: 6px 0; outline: none; }
+  .send { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .send:hover { filter: brightness(1.08); }
+  .send:disabled { opacity: .4; cursor: not-allowed; filter: none; }
+  .hint { text-align: center; color: var(--muted); font-size: 11px; font-family: var(--mono); margin-top: 8px; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+
+  @media (max-width: 760px) {
+    .side { position: absolute; z-index: 40; height: 100%; box-shadow: 0 0 40px rgba(0,0,0,.6); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .side { transition: none; }
+    .caret { animation: none; }
+    .stream { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============================ SIDEBAR ============================ -->
+  <aside class="side">
+    <div class="side-head">
+      <div class="brand">
+        <div class="mark">L</div>
+        <h1>LLM Chat</h1>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Estado</h2>
+      <div class="stat"><span class="k">Conexión</span>
+        <span class="v"><span class="health" id="health"><span class="led"></span><span id="healthTxt">&mdash;</span></span></span>
+      </div>
+      <div class="stat"><span class="k">Modelo</span><span class="v" id="stModel">&mdash;</span></div>
+      <div class="stat"><span class="k">Latencia</span><span class="v" id="stLatency">&mdash;</span></div>
+      <div class="stat"><span class="k">Contexto</span><span class="v" id="stCtx">&mdash;</span></div>
+      <div class="stat"><span class="k">Crédito</span><span class="v" id="stRemain">&mdash;</span></div>
+      <div class="stat"><span class="k">Último uso</span><span class="v" id="stUse">&mdash;</span></div>
+      <button class="refresh" id="refreshBtn">&#8635; actualizar</button>
+    </div>
+
+    <div class="card">
+      <h2>Configuración</h2>
+      <label class="field">
+        <span class="lbl">modelo
+          <span class="info" data-tip="Identificador del modelo en OpenRouter, en formato proveedor/modelo. Ej: anthropic/claude-sonnet-4.5">?</span>
+        </span>
+        <input type="text" id="model" list="modelList" placeholder="anthropic/claude-sonnet-4.5" />
+        <datalist id="modelList">
+          <option value="anthropic/claude-sonnet-4.5"></option>
+          <option value="anthropic/claude-opus-4"></option>
+          <option value="google/gemini-2.5-pro"></option>
+          <option value="openai/gpt-4o"></option>
+        </datalist>
+      </label>
+
+      <div class="toggle" style="margin-bottom:14px;">
+        <span class="lbl">streaming
+          <span class="info" data-tip="Activado: la respuesta llega token por token en tiempo real. Desactivado: llega completa de una sola vez.">?</span>
+        </span>
+        <label class="switch"><input type="checkbox" id="streamToggle" checked /><span class="track"></span></label>
+      </div>
+
+      <details class="params">
+        <summary>parámetros (opcionales)</summary>
+        <div class="params-grid">
+          <label class="field">
+            <span class="lbl">temperature
+              <span class="info" data-tip="Aleatoriedad de la respuesta. Bajo (0&ndash;0.3): más preciso y repetible. Alto (0.8&ndash;1.5): más creativo y variado. Vacío: usa el valor por defecto del modelo.">?</span>
+            </span>
+            <input type="number" id="temperature" step="0.1" min="0" max="2" placeholder="por defecto" />
+          </label>
+          <label class="field">
+            <span class="lbl">max_tokens
+              <span class="info" data-tip="Tope de tokens que el modelo puede generar en la respuesta. OpenRouter reserva crédito por este valor antes de responder, por eso conviene un número moderado.">?</span>
+            </span>
+            <input type="number" id="maxTokens" min="1" placeholder="1024 por defecto" />
+          </label>
+          <label class="field">
+            <span class="lbl">top_p
+              <span class="info" data-tip="Muestreo por núcleo: el modelo elige solo entre los tokens más probables que sumen esta probabilidad (0&ndash;1). Alternativa a temperature; normalmente se deja vacío.">?</span>
+            </span>
+            <input type="number" id="topP" step="0.05" min="0" max="1" placeholder="por defecto" />
+          </label>
+        </div>
+      </details>
+    </div>
+  </aside>
+
+  <!-- ============================== MAIN ============================== -->
+  <main class="main">
+    <div class="topbar">
+      <button class="iconbtn" id="toggleSide" title="Mostrar/ocultar panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <div class="title" id="topTitle">modelo: <span id="topModel">&mdash;</span></div>
+      <button class="iconbtn" id="clearBtn" title="Limpiar chat" style="margin-left:auto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>
+      </button>
+      <div class="dot" id="topDot"></div>
+    </div>
+
+    <div class="stream" id="stream">
+      <div class="stream-inner">
+        <div class="empty" id="empty">
+          <div class="big">Empieza a chatear con el modelo.</div>
+          <div>Escribe abajo. Puedes adjuntar <code>PDF</code> e imágenes para que los analice.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="composer-inner">
+        <div class="pending" id="pending"></div>
+        <div class="box">
+          <input type="file" id="file" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.md" />
+          <button class="iconbtn" id="attachBtn" title="Adjuntar archivo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.3 20.2a5 5 0 0 1-7.07-7.07l9.2-9.2a3.33 3.33 0 0 1 4.71 4.71l-9.2 9.2a1.67 1.67 0 0 1-2.36-2.36l8.49-8.49"/></svg>
+          </button>
+          <textarea id="input" rows="1" placeholder="Mensaje al modelo&hellip;"></textarea>
+          <button class="iconbtn send" id="sendBtn" title="Enviar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+        </div>
+        <div class="hint">Enter env&iacute;a &middot; Shift+Enter salto de l&iacute;nea</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// Front -> tu API (rutas relativas /api/*). El front arma el body; la API lo reenvía intacto.
+const API = "";
+const $ = id => document.getElementById(id);
+const els = {
+  app: $("app"), stream: $("stream"), inner: document.querySelector(".stream-inner"),
+  empty: $("empty"), input: $("input"), sendBtn: $("sendBtn"),
+  attachBtn: $("attachBtn"), file: $("file"), pending: $("pending"),
+  model: $("model"), streamToggle: $("streamToggle"),
+  temperature: $("temperature"), maxTokens: $("maxTokens"), topP: $("topP"),
+  refreshBtn: $("refreshBtn"),
+};
+
+const history = [];
+let attachments = [];
+let busy = false;
+
+// ----------------------------- Sidebar -----------------------------
+function toggleSide() { els.app.classList.toggle("collapsed"); }
+$("toggleSide").onclick = toggleSide;
+
+function resetChat() {
+  history.length = 0;
+  attachments = []; renderPending();
+  els.inner.innerHTML = '<div class="empty" id="empty"><div class="big">Empieza a chatear con el modelo.</div><div>Escribe abajo. Puedes adjuntar <code>PDF</code> e im\u00e1genes para que los analice.</div></div>';
+  els.empty = $("empty");
+}
+$("clearBtn").onclick = resetChat;
+
+// ------------------------------ Estado ------------------------------
+async function loadStatus() {
+  try {
+    const r = await fetch(API + "/api/status");
+    const d = await r.json();
+    const ok = d.reachable;
+    $("health").className = "health " + (ok ? "ok" : "bad");
+    $("healthTxt").textContent = ok ? "conectado" : "sin conexión";
+    $("topDot").className = "dot " + (ok ? "ok" : "bad");
+    const modelName = (d.model && (d.model.name || d.model.id)) || d.default_model || "—";
+    $("stModel").textContent = d.default_model || "—";
+    $("topModel").textContent = els.model.value || d.default_model || "—";
+    $("stLatency").textContent = d.latency_ms != null ? d.latency_ms + " ms" : "—";
+    $("stCtx").textContent = d.model && d.model.context_length ? d.model.context_length.toLocaleString() + " tok" : "—";
+    $("stRemain").textContent = d.key ? (d.key.limit_remaining != null ? "$" + Number(d.key.limit_remaining).toFixed(4) : "∞") : "—";
+    if (d.default_model && !els.model.value) { els.model.value = d.default_model; $("topModel").textContent = d.default_model; }
+  } catch (e) {
+    $("health").className = "health bad";
+    $("healthTxt").textContent = "API caída";
+    $("topDot").className = "dot bad";
+  }
+}
+
+// --------------------------- Adjuntos -------------------------------
+els.attachBtn.onclick = () => els.file.click();
+els.file.onchange = async () => { await addFiles(els.file.files); els.file.value = ""; };
+
+async function addFiles(list) {
+  for (const f of list) {
+    const item = { name: f.name, type: f.type };
+    if (f.type === "application/pdf") { item.kind = "pdf"; item.data = await toDataURL(f); }
+    else if (f.type.startsWith("image/")) { item.kind = "image"; item.data = await toDataURL(f); }
+    else { item.kind = "text"; item.data = await f.text(); }
+    attachments.push(item);
+  }
+  renderPending();
+}
+
+// Arrastrar y soltar SOLO sobre el área del input.
+const dropZone = document.querySelector(".box");
+dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag"); });
+dropZone.addEventListener("dragleave", e => { if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove("drag"); });
+dropZone.addEventListener("drop", async e => {
+  e.preventDefault();
+  dropZone.classList.remove("drag");
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (files && files.length) await addFiles(files);
+});
+// Evita que soltar un archivo FUERA del input abra/navegue (pero no adjunta nada).
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => { if (!dropZone.contains(e.target)) e.preventDefault(); });
+function toDataURL(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+}
+function renderPending() {
+  els.pending.innerHTML = "";
+  attachments.forEach((a, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = `<span>${icon(a.kind)} ${escapeHtml(a.name)}</span><span class="x" data-i="${i}">&#10005;</span>`;
+    chip.querySelector(".x").onclick = () => { attachments.splice(i, 1); renderPending(); };
+    els.pending.appendChild(chip);
+  });
+}
+function icon(k) { return k === "pdf" ? "\uD83D\uDCC4" : k === "image" ? "\uD83D\uDDBC" : "\uD83D\uDCC3"; }
+
+// content en formato OpenAI/OpenRouter. Los archivos van como bloques tal cual:
+// el modelo recibe el PDF/imagen directamente. No se inyecta ningún prompt.
+function buildUserContent(text) {
+  if (attachments.length === 0) return text;            // solo texto -> string simple
+  const parts = [];
+  if (text) parts.push({ type: "text", text });
+  for (const a of attachments) {
+    if (a.kind === "pdf") parts.push({ type: "file", file: { filename: a.name, file_data: a.data } });
+    else if (a.kind === "image") parts.push({ type: "image_url", image_url: { url: a.data } });
+    else parts.push({ type: "text", text: `\n[${a.name}]\n${a.data}` });
+  }
+  return parts;
+}
+function hasPdf() { return attachments.some(a => a.kind === "pdf"); }
+
+// ----------------------------- Render -------------------------------
+function addMessage(role) {
+  els.empty && els.empty.remove();
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + (role === "user" ? "user" : role === "error" ? "err" : "bot");
+  const tag = role === "user" ? "TÚ" : role === "error" ? "ERR" : "LLM";
+  const name = role === "user" ? "tú" : role === "error" ? "error" : "modelo";
+  wrap.innerHTML = `<div class="avatar">${tag}</div><div class="bubble"><div class="role">${name}</div><div class="body"></div></div>`;
+  els.inner.appendChild(wrap);
+  scrollDown();
+  return wrap.querySelector(".body");
+}
+function scrollDown() { els.stream.scrollTop = els.stream.scrollHeight; }
+
+// markdown mínimo SOLO para mostrar (la API entrega el texto crudo del modelo)
+function renderMd(text) {
+  let s = escapeHtml(text);
+  s = s.replace(/```([\s\S]*?)```/g, (_, c) => `<pre><code>${c.replace(/^\n/, "")}</code></pre>`);
+  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  s = s.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+  return s;
+}
+function escapeHtml(t) { return t.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+// ------------------------------ Enviar ------------------------------
+async function send() {
+  const text = els.input.value.trim();
+  if ((!text && attachments.length === 0) || busy) return;
+
+  history.push({ role: "user", content: buildUserContent(text) });
+
+  const userBody = addMessage("user");
+  userBody.innerHTML = renderMd(text || "(archivo adjunto)");
+  if (attachments.length) {
+    const list = document.createElement("div");
+    list.className = "attachlist";
+    list.innerHTML = attachments.map(a => `<span class="chip">${icon(a.kind)} ${escapeHtml(a.name)}</span>`).join("");
+    userBody.parentElement.appendChild(list);
+  }
+
+  attachments = []; renderPending();
+  els.input.value = ""; autosize();
+
+  setBusy(true);
+  const botBody = addMessage("assistant");
+
+  // body que se envía a la API (que lo reenvía intacto al modelo)
+  // Petición que se reenvía intacta al modelo. No forzamos el motor de PDF:
+  // OpenRouter usa el nativo si el modelo lo soporta y, si no, cae a OCR.
+  const payload = { model: els.model.value.trim(), messages: history, stream: els.streamToggle.checked };
+  const t = parseFloat(els.temperature.value); if (!isNaN(t)) payload.temperature = t;
+  const m = parseInt(els.maxTokens.value);     payload.max_tokens = !isNaN(m) ? m : 1024;
+  const p = parseFloat(els.topP.value);        if (!isNaN(p)) payload.top_p = p;
+
+  try {
+    if (payload.stream) {
+      await streamChat(payload, botBody);
+    } else {
+      const r = await fetch(API + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(fmtErr(d.error || d));
+      const out = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "(respuesta vacía)";
+      botBody.innerHTML = renderMd(out);
+      history.push({ role: "assistant", content: out });
+      if (d.usage) $("stUse").textContent = (d.usage.prompt_tokens||0) + " / " + (d.usage.completion_tokens||0) + " tok";
+    }
+  } catch (e) {
+    const w = botBody.parentElement.parentElement;
+    w.className = "msg err"; w.querySelector(".avatar").textContent = "ERR";
+    botBody.textContent = "" + (e.message || e);
+  } finally {
+    setBusy(false); scrollDown();
+  }
+}
+
+async function streamChat(payload, botBody) {
+  const r = await fetch(API + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!r.ok) { let msg; try { msg = fmtErr((await r.json()).error); } catch { msg = await r.text(); } throw new Error(msg); }
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buffer = "", acc = "";
+  botBody.innerHTML = '<span class="caret"></span>';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += dec.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s || s.startsWith(":")) continue;
+      if (!s.startsWith("data:")) continue;
+      const data = s.slice(5).trim();
+      if (data === "[DONE]") continue;
+      try {
+        const json = JSON.parse(data);
+        const delta = json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content;
+        if (delta) { acc += delta; botBody.innerHTML = renderMd(acc) + '<span class="caret"></span>'; scrollDown(); }
+        if (json.usage) $("stUse").textContent = (json.usage.prompt_tokens||0) + " / " + (json.usage.completion_tokens||0) + " tok";
+      } catch (e) { /* fragmento parcial */ }
+    }
+  }
+  botBody.innerHTML = renderMd(acc || "(respuesta vacía)");
+  history.push({ role: "assistant", content: acc });
+}
+
+function fmtErr(e) {
+  if (e == null) return "Error desconocido";
+  if (typeof e === "string") return e;
+  if (e.message) return e.message;
+  try { return JSON.stringify(e); } catch { return "" + e; }
+}
+
+function setBusy(b) { busy = b; els.sendBtn.disabled = b; }
+
+// --------------------------- Interacciones --------------------------
+function autosize() { els.input.style.height = "auto"; els.input.style.height = Math.min(els.input.scrollHeight, 200) + "px"; }
+els.input.addEventListener("input", autosize);
+els.input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+els.sendBtn.onclick = send;
+els.refreshBtn.onclick = loadStatus;
+els.model.addEventListener("input", () => { $("topModel").textContent = els.model.value || "—"; });
+
+loadStatus();
+setInterval(loadStatus, 30000);
+</script>
+</body>
+</html>
