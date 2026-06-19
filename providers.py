@@ -261,6 +261,10 @@ def _to_converse(payload: dict, default_model: str) -> dict:
     cfg: dict[str, Any] = {}
     if payload.get("max_tokens") is not None:
         cfg["maxTokens"] = int(payload["max_tokens"])
+    elif settings.bedrock_max_output_tokens:
+        # Bedrock usa un default bajo si no se especifica -> ponemos uno holgado
+        # para que no corte respuestas largas (configurable, hasta el máx. del modelo).
+        cfg["maxTokens"] = settings.bedrock_max_output_tokens
     if payload.get("temperature") is not None:
         cfg["temperature"] = float(payload["temperature"])
     if payload.get("top_p") is not None:

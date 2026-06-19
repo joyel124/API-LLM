@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Bedrock API key: el string largo que termina en "=".
     aws_bearer_token_bedrock: str = ""
     bedrock_model_id: str = "amazon.nova-lite-v1:0"   # modelo por defecto
+    # Bedrock usa un default BAJO si no se manda maxTokens (corta respuestas).
+    # Ponemos un tope holgado por defecto. Súbelo hasta el máximo del modelo
+    # (Nova 1 Lite ~5000; Nova 2 hasta 65000).
+    bedrock_max_output_tokens: int = 5000
 
     # ----- CORS -----
     cors_origins: List[str] = ["*"]
