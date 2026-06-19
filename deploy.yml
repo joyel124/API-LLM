@@ -1,0 +1,25 @@
+name: Deploy
+
+# Se ejecuta en cada push a main (cada commit subido a esa rama)
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}   # permite lanzarlo manualmente desde GitHub
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Desplegar por SSH en la instancia Ubuntu
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            cd ${{ secrets.APP_DIR || '~/llm-gateway' }}
+            git pull origin main
+            docker compose up -d --build
+            docker image prune -f

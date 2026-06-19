@@ -129,6 +129,7 @@
 
   button.refresh { width: 100%; margin-top: 4px; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 7px; font-family: var(--mono); font-size: 11px; cursor: pointer; }
   button.refresh:hover { color: var(--text); border-color: var(--accent); }
+  .usage { margin-top: 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 
   /* ------------------------------ Main ------------------------------ */
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -194,6 +195,7 @@
   .send { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   .send:hover { filter: brightness(1.08); }
   .send:disabled { opacity: .4; cursor: not-allowed; filter: none; }
+  .send.stop { background: var(--danger); border-color: var(--danger); }
   .hint { text-align: center; color: var(--muted); font-size: 11px; font-family: var(--mono); margin-top: 8px; }
 
   ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -229,8 +231,9 @@
       <div class="stat"><span class="k">Modelo</span><span class="v" id="stModel">&mdash;</span></div>
       <div class="stat"><span class="k">Latencia</span><span class="v" id="stLatency">&mdash;</span></div>
       <div class="stat"><span class="k">Contexto</span><span class="v" id="stCtx">&mdash;</span></div>
-      <div class="stat"><span class="k">Crédito</span><span class="v" id="stRemain">&mdash;</span></div>
-      <div class="stat"><span class="k">Último uso</span><span class="v" id="stUse">&mdash;</span></div>
+      <div class="stat"><span class="k" id="stRemainK">Crédito</span><span class="v" id="stRemain">&mdash;</span></div>
+      <div class="stat"><span class="k">Última consulta</span><span class="v" id="stUse">&mdash;</span></div>
+      <div class="stat"><span class="k">Total sesión</span><span class="v" id="stTotal">&mdash;</span></div>
       <button class="refresh" id="refreshBtn">&#8635; actualizar</button>
     </div>
 
@@ -339,6 +342,9 @@ const els = {
 const history = [];
 let attachments = [];
 let busy = false;
+let abortController = null;
+const SEND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>';
+const STOP_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 
 // ----------------------------- Sidebar -----------------------------
 function toggleSide() { els.app.classList.toggle("collapsed"); }
@@ -366,7 +372,15 @@ async function loadStatus() {
     $("topModel").textContent = els.model.value || d.default_model || "—";
     $("stLatency").textContent = d.latency_ms != null ? d.latency_ms + " ms" : "—";
     $("stCtx").textContent = d.model && d.model.context_length ? d.model.context_length.toLocaleString() + " tok" : "—";
-    $("stRemain").textContent = d.key ? (d.key.limit_remaining != null ? "$" + Number(d.key.limit_remaining).toFixed(4) : "∞") : "—";
+    if (d.key) {
+      $("stRemainK").textContent = "Crédito";
+      $("stRemain").textContent = d.key.limit_remaining != null ? "$" + Number(d.key.limit_remaining).toFixed(4) : "∞";
+    } else if (d.region) {
+      $("stRemainK").textContent = "Región";
+      $("stRemain").textContent = d.region;
+    } else {
+      $("stRemain").textContent = "—";
+    }
     if (d.default_model && !els.model.value) { els.model.value = d.default_model; $("topModel").textContent = d.default_model; }
   } catch (e) {
     $("health").className = "health bad";
@@ -479,45 +493,83 @@ async function send() {
   els.input.value = ""; autosize();
 
   setBusy(true);
+  abortController = new AbortController();
   const botBody = addMessage("assistant");
 
   // body que se envía a la API (que lo reenvía intacto al modelo)
-  // Petición que se reenvía intacta al modelo. No forzamos el motor de PDF:
-  // OpenRouter usa el nativo si el modelo lo soporta y, si no, cae a OCR.
+  // No forzamos el motor de PDF: OpenRouter usa el nativo si el modelo lo soporta y, si no, cae a OCR.
   const payload = { model: els.model.value.trim(), messages: history, stream: els.streamToggle.checked };
+  // Pedir el desglose de tokens también en streaming (inocuo para Bedrock, que lo ignora).
+  if (payload.stream) payload.stream_options = { include_usage: true };
   const t = parseFloat(els.temperature.value); if (!isNaN(t)) payload.temperature = t;
   // max_tokens: por defecto NO se manda -> el modelo responde sin tope artificial.
-  // (OpenRouter reservará el máximo del modelo, así que requiere saldo suficiente.)
   const m = parseInt(els.maxTokens.value);     if (!isNaN(m)) payload.max_tokens = m;
   const p = parseFloat(els.topP.value);        if (!isNaN(p)) payload.top_p = p;
 
   try {
     if (payload.stream) {
-      await streamChat(payload, botBody);
+      const usage = await streamChat(payload, botBody);
+      renderUsage(usage, botBody);
     } else {
-      const r = await fetch(API + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const r = await fetch(API + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: abortController.signal });
       const d = await r.json();
       if (!r.ok || d.error) throw new Error(fmtErr(d.error || d));
       const out = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "(respuesta vacía)";
       botBody.innerHTML = renderMd(out);
       history.push({ role: "assistant", content: out });
-      if (d.usage) $("stUse").textContent = (d.usage.prompt_tokens||0) + " / " + (d.usage.completion_tokens||0) + " tok";
+      renderUsage(d.usage, botBody);
     }
   } catch (e) {
-    const w = botBody.parentElement.parentElement;
-    w.className = "msg err"; w.querySelector(".avatar").textContent = "ERR";
-    botBody.textContent = "" + (e.message || e);
+    if (e.name === "AbortError") {
+      botBody.parentElement.querySelector(".role").textContent = "cancelado";
+      botBody.innerHTML = '<span style="color:var(--muted)">(cancelado)</span>';
+    } else {
+      const w = botBody.parentElement.parentElement;
+      w.className = "msg err"; w.querySelector(".avatar").textContent = "ERR";
+      botBody.textContent = "" + (e.message || e);
+    }
   } finally {
-    setBusy(false); scrollDown();
+    setBusy(false); abortController = null; refreshUsage(); scrollDown();
   }
 }
 
+// Precios del modelo (USD por 1M tokens), traídos de /api/usage para estimar costo.
+let priceIn = 0, priceOut = 0;
+function fmtCost(p, c) {
+  if (!priceIn && !priceOut) return "";
+  return " · ≈ $" + ((p / 1e6) * priceIn + (c / 1e6) * priceOut).toFixed(6);
+}
+
+// Muestra el consumo de la consulta: en el panel y debajo del mensaje del modelo.
+function renderUsage(usage, botBody) {
+  if (!usage) return;
+  const p = usage.prompt_tokens || 0, c = usage.completion_tokens || 0;
+  $("stUse").textContent = "↑" + p + " ·↓" + c;
+  if (botBody) {
+    const f = document.createElement("div");
+    f.className = "usage";
+    f.textContent = "↑ " + p + " entrada · ↓ " + c + " salida · Σ " + (usage.total_tokens || (p + c)) + " tok" + fmtCost(p, c);
+    botBody.parentElement.appendChild(f);
+  }
+}
+
+// Consulta el total acumulado al servidor (incluye lo consumido por otras apps).
+async function refreshUsage() {
+  try {
+    const u = await (await fetch(API + "/api/usage")).json();
+    priceIn = u.price_input_per_1m || 0;
+    priceOut = u.price_output_per_1m || 0;
+    const cost = u.estimated_cost_usd != null ? " · ≈ $" + Number(u.estimated_cost_usd).toFixed(4) : "";
+    $("stTotal").textContent = "↑" + (u.prompt_tokens || 0) + " ·↓" + (u.completion_tokens || 0) + cost;
+  } catch (e) { /* sin conexión */ }
+}
+
 async function streamChat(payload, botBody) {
-  const r = await fetch(API + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const r = await fetch(API + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: abortController.signal });
   if (!r.ok) { let msg; try { msg = fmtErr((await r.json()).error); } catch { msg = await r.text(); } throw new Error(msg); }
   const reader = r.body.getReader();
   const dec = new TextDecoder();
-  let buffer = "", acc = "";
+  let buffer = "", acc = "", usage = null;
   botBody.innerHTML = '<span class="caret"></span>';
   while (true) {
     const { value, done } = await reader.read();
@@ -535,12 +587,13 @@ async function streamChat(payload, botBody) {
         const json = JSON.parse(data);
         const delta = json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content;
         if (delta) { acc += delta; botBody.innerHTML = renderMd(acc) + '<span class="caret"></span>'; scrollDown(); }
-        if (json.usage) $("stUse").textContent = (json.usage.prompt_tokens||0) + " / " + (json.usage.completion_tokens||0) + " tok";
+        if (json.usage) usage = json.usage;
       } catch (e) { /* fragmento parcial */ }
     }
   }
   botBody.innerHTML = renderMd(acc || "(respuesta vacía)");
   history.push({ role: "assistant", content: acc });
+  return usage;
 }
 
 function fmtErr(e) {
@@ -550,18 +603,25 @@ function fmtErr(e) {
   try { return JSON.stringify(e); } catch { return "" + e; }
 }
 
-function setBusy(b) { busy = b; els.sendBtn.disabled = b; }
+function setBusy(b) {
+  busy = b;
+  els.sendBtn.classList.toggle("stop", b);
+  els.sendBtn.innerHTML = b ? STOP_SVG : SEND_SVG;
+  els.sendBtn.title = b ? "Cancelar" : "Enviar";
+}
+function cancel() { if (abortController) abortController.abort(); }
 
 // --------------------------- Interacciones --------------------------
 function autosize() { els.input.style.height = "auto"; els.input.style.height = Math.min(els.input.scrollHeight, 200) + "px"; }
 els.input.addEventListener("input", autosize);
 els.input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
-els.sendBtn.onclick = send;
-els.refreshBtn.onclick = loadStatus;
+els.sendBtn.onclick = () => (busy ? cancel() : send());
+els.refreshBtn.onclick = () => { loadStatus(); refreshUsage(); };
 els.model.addEventListener("input", () => { $("topModel").textContent = els.model.value || "—"; });
 
 loadStatus();
-setInterval(loadStatus, 30000);
+refreshUsage();
+setInterval(() => { loadStatus(); refreshUsage(); }, 30000);
 </script>
 </body>
 </html>

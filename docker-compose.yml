@@ -1,0 +1,16 @@
+services:
+  gateway:
+    build: .
+    image: llm-gateway:latest
+    container_name: llm-gateway
+    restart: unless-stopped
+    env_file:
+      - .env                # las credenciales viven aquí, NO en la imagen
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

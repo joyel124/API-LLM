@@ -1,13 +1,15 @@
 """
-main.py — el gateway (intermediario) en FastAPI.
+main.py — el gateway en FastAPI.
 
-Dos endpoints:
-  GET  /api/status  -> estado del proveedor, datos de la key y del modelo.
-  POST /api/chat    -> passthrough: recibe el body del usuario, lo reenvía al LLM
-                       y devuelve la respuesta (soporta streaming SSE).
+Endpoints:
+  GET  /api/status  -> estado del proveedor (conexión, modelo, latencia, crédito/región).
+  GET  /api/usage   -> consumo total de tokens acumulado desde que arrancó el servidor.
+  POST /api/chat    -> passthrough: reenvía el body al LLM y devuelve la respuesta
+                       (JSON o stream SSE). Registra el consumo de cada consulta.
 
-Además sirve el front estático (carpeta ./front) en la raíz "/".
+Sirve además el front estático (carpeta ./front) en "/".
 """
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -31,37 +33,113 @@ app.add_middleware(
 provider = get_provider()
 
 
+# --------------------------------------------------------------------------- #
+# Contador de consumo (en memoria; se reinicia al reiniciar el servidor)
+# --------------------------------------------------------------------------- #
+class UsageTracker:
+    def __init__(self) -> None:
+        self.requests = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+
+    def record(self, usage: dict | None) -> None:
+        self.requests += 1
+        if usage:
+            p = usage.get("prompt_tokens") or 0
+            c = usage.get("completion_tokens") or 0
+            t = usage.get("total_tokens") or (p + c)
+            self.prompt_tokens += p
+            self.completion_tokens += c
+            self.total_tokens += t
+
+    def snapshot(self) -> dict:
+        cost = (self.prompt_tokens / 1_000_000) * settings.price_input_per_1m \
+            + (self.completion_tokens / 1_000_000) * settings.price_output_per_1m
+        return {
+            "provider": provider.name,
+            "requests": self.requests,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "estimated_cost_usd": round(cost, 6),
+            "price_input_per_1m": settings.price_input_per_1m,
+            "price_output_per_1m": settings.price_output_per_1m,
+        }
+
+
+usage_tracker = UsageTracker()
+
+
+def _scan_usage(buffer: str):
+    """Busca 'usage' en las líneas SSE completas. Devuelve (resto_incompleto, ultima_usage)."""
+    last = None
+    lines = buffer.split("\n")
+    rest = lines.pop()  # la última línea puede estar incompleta
+    for line in lines:
+        s = line.strip()
+        if not s.startswith("data:"):
+            continue
+        data = s[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            obj = json.loads(data)
+            if obj.get("usage"):
+                last = obj["usage"]
+        except Exception:
+            pass
+    return rest, last
+
+
+@app.get("/healthz")
+async def healthz():
+    """Health-check liviano (no llama al proveedor). Para Docker/monitoreo."""
+    return JSONResponse({"ok": True})
+
+
 @app.get("/api/status")
 async def status():
-    """Información del LLM / proveedor: si responde, latencia, créditos, etc."""
     return JSONResponse(await provider.status())
+
+
+@app.get("/api/usage")
+async def usage():
+    """Consumo total de tokens acumulado (entrada, salida, total y nº de consultas)."""
+    return JSONResponse(usage_tracker.snapshot())
 
 
 @app.post("/api/chat")
 async def chat(request: Request):
-    """
-    Intermediario puro. Reenvía EXACTAMENTE lo que llega del cliente al LLM.
-    Si el body trae "stream": true, responde con un stream SSE.
-    """
     body = await request.json()
     stream = bool(body.get("stream", False))
 
     try:
         if stream:
             agen = provider.chat_stream(body)
-            # Pedimos el primer fragmento ANTES de abrir el StreamingResponse:
-            # así un error del proveedor (p. ej. 401) se devuelve como JSON limpio
-            # en vez de romper la respuesta a mitad de stream.
             try:
                 first = await agen.__anext__()
             except StopAsyncIteration:
                 first = None
 
             async def event_stream():
-                if first is not None:
-                    yield first
-                async for chunk in agen:
-                    yield chunk
+                buf = ""
+                last_usage = None
+                try:
+                    if first is not None:
+                        buf += first.decode("utf-8", "ignore")
+                        buf, u = _scan_usage(buf)
+                        if u:
+                            last_usage = u
+                        yield first
+                    async for chunk in agen:
+                        buf += chunk.decode("utf-8", "ignore")
+                        buf, u = _scan_usage(buf)
+                        if u:
+                            last_usage = u
+                        yield chunk
+                finally:
+                    usage_tracker.record(last_usage)
 
             return StreamingResponse(
                 event_stream(),
@@ -70,6 +148,8 @@ async def chat(request: Request):
             )
 
         result = await provider.chat(body)
+        if isinstance(result, dict):
+            usage_tracker.record(result.get("usage"))
         return JSONResponse(result)
 
     except ProviderError as exc:
